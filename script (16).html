@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <title>Position Map</title>
+    <style>
+        #map { height: 500px; width: 100%; margin-bottom: 10px; }
+        #positionsList {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+        }
+        #positionsList h2 {
+            margin-top: 0;
+        }
+        #status {
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        /* Thanh nhập lệnh góc trên phải */
+        #commandInput {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 150px;
+            padding: 5px 10px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            outline: none;
+            z-index: 1000;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+</head>
+<body>
+    <h1>Position Map</h1>
+    <div id="status">Đang chờ lấy vị trí...</div>
+    <div id="map"></div>
+    <div id="positionsList">
+        <h2>Danh sách vị trí đã lưu</h2>
+        <ul id="list"></ul>
+    </div>
+
+    <!-- Thanh nhập lệnh -->
+    <input id="commandInput" type="text" placeholder="Nhập lệnh..." title='Nhập "reset123" để xóa dữ liệu' />
+
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        // Firebase Config - Thay cấu hình thật của bạn vào đây
+        const firebaseConfig = {
+            apiKey: "AIzaSyB3DDK2ejJwAENWvBfO6O2QCKoOTFgEgNc",
+            authDomain: "spy123-18cbc.firebaseapp.com",
+            databaseURL: "https://spy123-18cbc-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "spy123-18cbc",
+            storageBucket: "spy123-18cbc.appspot.com",
+            messagingSenderId: "439442019908",
+            appId: "1:439442019908:web:82e7988b8f7e8cfe4f0e11"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // Khởi tạo bản đồ
+        const map = L.map('map').setView([0, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        const markers = new Map(); // Lưu marker theo key để dễ quản lý
+
+        // Tham chiếu tới danh sách vị trí trên trang
+        const listEl = document.getElementById('list');
+        const statusEl = document.getElementById('status');
+
+        // Hàm cập nhật danh sách vị trí trong UI
+        function updatePositionsList(data) {
+            listEl.innerHTML = '';
+            for (const key in data) {
+                const p = data[key];
+                const date = new Date(p.timestamp);
+                const li = document.createElement('li');
+                li.textContent = `Lat: ${p.lat.toFixed(5)}, Lon: ${p.lon.toFixed(5)} - ${date.toLocaleString()}`;
+                listEl.appendChild(li);
+            }
+        }
+
+        // Lắng nghe dữ liệu realtime từ Firebase
+        db.ref('positions').on('value', snapshot => {
+            const data = snapshot.val() || {};
+            // Xóa marker cũ
+            markers.forEach(marker => map.removeLayer(marker));
+            markers.clear();
+
+            // Thêm marker mới
+            for (const key in data) {
+                const p = data[key];
+                const marker = L.marker([p.lat, p.lon]).addTo(map);
+                const date = new Date(p.timestamp);
+                marker.bindPopup(`Lat: ${p.lat.toFixed(5)}, Lon: ${p.lon.toFixed(5)}<br>${date.toLocaleString()}`);
+                markers.set(key, marker);
+            }
+
+            // Cập nhật danh sách vị trí trên UI
+            updatePositionsList(data);
+        });
+
+        // Hàm lưu vị trí mới lên Firebase
+        function savePosition(lat, lon) {
+            const newRef = db.ref('positions').push();
+            newRef.set({ lat, lon, timestamp: Date.now() });
+        }
+
+        // Lấy vị trí người dùng liên tục và lưu tự động
+        if (navigator.geolocation) {
+            statusEl.textContent = 'Đang lấy vị trí...';
+
+            navigator.geolocation.watchPosition(pos => {
+                const lat = pos.coords.latitude;
+                const lon = pos.coords.longitude;
+
+                savePosition(lat, lon);
+
+                // Cập nhật map view và marker vị trí hiện tại
+                map.setView([lat, lon], 5);
+
+                statusEl.textContent = `Vị trí hiện tại: Lat ${lat.toFixed(5)}, Lon ${lon.toFixed(5)}`;
+
+            }, err => {
+                statusEl.textContent = 'Không thể lấy vị trí: ' + err.message;
+            }, {
+                enableHighAccuracy: true,
+                maximumAge: 10000,
+                timeout: 10000
+            });
+        } else {
+            alert("Trình duyệt của bạn không hỗ trợ Geolocation.");
+            statusEl.textContent = 'Trình duyệt không hỗ trợ lấy vị trí.';
+        }
+
+        // Xử lý thanh nhập lệnh reset
+        const commandInput = document.getElementById('commandInput');
+        commandInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                const cmd = commandInput.value.trim();
+                if (cmd === 'reset123') {
+                    if (confirm('Bạn có chắc chắn muốn xóa hết dữ liệu vị trí không?')) {
+                        db.ref('positions').remove()
+                        .then(() => {
+                            alert('Đã xóa hết dữ liệu vị trí!');
+                            commandInput.value = '';
+                        })
+                        .catch(err => {
+                            alert('Lỗi khi xóa dữ liệu: ' + err.message);
+                        });
+                    }
+                } else {
+                    alert('Lệnh không hợp lệ!');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
